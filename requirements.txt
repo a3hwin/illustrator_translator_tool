@@ -1,0 +1,16 @@
+# UI & Orchestration Layer
+streamlit
+
+# XML/SVG Parsing (Layer Traversal)
+beautifulsoup4
+lxml
+
+# Bidirectional & Complex Script Formatting
+arabic-reshaper
+python-bidi
+
+# AI Agent Translation
+google-generativeai
+
+# Environment Variables & Utilities
+python-dotenv

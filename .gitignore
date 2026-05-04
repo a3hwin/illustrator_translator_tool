@@ -1,0 +1,15 @@
+# Environments
+venv/
+__pycache__/
+
+# Secrets (CRITICAL)
+.env
+
+# Application Data
+data/input/
+data/temp/
+bridge_output.svg
+
+# OS generated files
+.DS_Store
+Thumbs.db
