@@ -85,6 +85,16 @@ def main():
     st.title("🎨 AI Vector Localizer")
     st.markdown("Automatically extract, translate, and inject text inside Adobe Illustrator & SVG files.")
 
+    # Usage Warning
+    st.info(
+        "⏳ **Usage & Performance Warning**\n\n"
+        "Adobe Illustrator files contain complex nested coordinate systems. Depending on the size of the file and the target language, processing can take **3 to 5 minutes**.\n\n"
+        "1. Upload your .ai or .svg file.\n"
+        "2. Select your target language.\n"
+        "3. Click 'Process Vector File'.\n\n"
+        "**WAIT.** The progress bar will update as the system bridges with Illustrator, batches the API calls, and redraws the vectors. **Do not refresh the page while the system is processing.**"
+    )
+
     # Environment Instructions
     with st.expander("⚙️ System Setup & Requirements", expanded=False):
         st.warning(
@@ -109,15 +119,31 @@ def main():
         label_visibility="collapsed"
     )
 
-    st.markdown("<br>", unsafe_allow_html=True) # Spacer
+    # --- Result Persistence ---
+    if "result_svg" not in st.session_state:
+        st.session_state.result_svg = None
+    if "download_bytes" not in st.session_state:
+        st.session_state.download_bytes = None
+    if "processing" not in st.session_state:
+        st.session_state.processing = False
+
+    def trigger_processing():
+        st.session_state.processing = True
+        st.session_state.result_svg = None # Reset previous results
 
     # Process Button
-    if uploaded_file and st.button("Process Vector File", type="primary", use_container_width=True):
-        
+    if uploaded_file and st.button(
+        "Process Vector File", 
+        type="primary", 
+        use_container_width=True, 
+        disabled=st.session_state.processing,
+        on_click=trigger_processing
+    ):
         # Verify API Key is loaded before starting
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             st.error("🚨 Gemini API Key missing! Please add `GEMINI_API_KEY` to your `.env` file.")
+            st.session_state.processing = False
             st.stop()
 
         # Save uploaded file
@@ -128,53 +154,57 @@ def main():
         service = TranslationService(api_key=api_key)
 
         st.markdown("### Processing...")
-        
-        # Initialize the progress bar UI
         progress_bar = st.progress(0)
         status_text = st.empty()
         tracker = ProgressTracker(progress_bar, status_text)
 
         try:
-            # Run the pipeline
             final_svg_path = service.process_file(
                 input_path=input_path,
                 target_language=target_lang,
                 status_container=tracker
             )
             
-            # Stop the tracker and show success
             tracker.stop(success=True)
             status_text.success("✨ Translation pipeline complete!")
 
-            # --- Base64 SVG Preview ---
-            st.markdown("### Localized Preview")
+            # Store results in session state for persistence
             with open(final_svg_path, "rb") as f:
-                base64_svg = base64.b64encode(f.read()).decode('utf-8')
-
-            svg_html = f'''
-                <div style="display: flex; justify-content: center; border: 1px solid #ddd; padding: 10px; border-radius: 8px; background-color: #f9f9f9; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                    <img src="data:image/svg+xml;base64,{base64_svg}" alt="Localized Vector" style="max-width: 100%;">
-                </div>
-                <br>
-            '''
-            st.markdown(svg_html, unsafe_allow_html=True)
-
-            # Download Button
-            with open(final_svg_path, "rb") as f:
-                st.download_button(
-                    label="⬇️ Download Translated SVG",
-                    data=f,
-                    file_name=f"localized_{target_lang}_{uploaded_file.name}.svg",
-                    mime="image/svg+xml",
-                    type="primary",
-                    use_container_width=True
-                )
+                content = f.read()
+                st.session_state.download_bytes = content
+                st.session_state.result_svg = base64.b64encode(content).decode('utf-8')
 
         except Exception as e:
             if 'tracker' in locals():
                 tracker.stop(success=False)
             status_text.error(f"Pipeline Failure: {str(e)}")
-            progress_bar.empty() # Hide the broken progress bar
+            progress_bar.empty()
+        
+        finally:
+            st.session_state.processing = False
+            st.rerun()
+
+    # --- Persistent Result Display ---
+    if st.session_state.result_svg:
+        st.divider()
+        st.markdown("### Localized Preview")
+        
+        svg_html = f'''
+            <div style="display: flex; justify-content: center; border: 1px solid #ddd; padding: 10px; border-radius: 8px; background-color: #f9f9f9; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                <img src="data:image/svg+xml;base64,{st.session_state.result_svg}" alt="Localized Vector" style="max-width: 100%;">
+            </div>
+            <br>
+        '''
+        st.markdown(svg_html, unsafe_allow_html=True)
+
+        st.download_button(
+            label="⬇️ Download Translated SVG",
+            data=st.session_state.download_bytes,
+            file_name=f"localized_{target_lang}_{uploaded_file.name}.svg" if uploaded_file else "translated.svg",
+            mime="image/svg+xml",
+            type="primary",
+            use_container_width=True
+        )
 
 if __name__ == "__main__":
     main()

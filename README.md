@@ -46,3 +46,11 @@ streamlit run app.py
 * **Native Bridge:** Uses ExtendScript (JSX) to interact with Illustrator, preserving live text tags and vector coordinates.
 * **Arabic RTL Support:** Implements automatic pre-shaping and `text-anchor` swapping for visually correct RTL alignment.
 * **Resilience:** Includes exponential backoff for API rate limits and robust file-lock handling for Windows environments.
+
+## ⏳ Usage & Performance Warning
+Adobe Illustrator files contain complex nested coordinate systems. Depending on the size of the file and the target language, processing can take **3 to 5 minutes**.
+
+1. **Upload** your `.ai` or `.svg` file.
+2. **Select** your target language.
+3. **Click** "Process Vector File".
+4. **WAIT.** The progress bar will update as the system bridges with Illustrator, batches the API calls, and redraws the vectors. **Do not refresh the page while the system is processing.**
