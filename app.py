@@ -6,8 +6,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from src.core import TranslationService
 import logging
-import threading
-import time
 
 
 # --- Restore Terminal Debug Logs ---
@@ -33,49 +31,21 @@ def clear_temp():
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-class ProgressTracker:
-    """A background-threaded tracker that provides smooth, continuous progress bar updates."""
-    def __init__(self, progress_bar, status_text):
+class SimpleTracker:
+    """A robust status tracker using native Streamlit containers."""
+    def __init__(self, progress_bar, status_obj):
         self.pb = progress_bar
-        self.st_text = status_text
-        self.current_value = 0.0
-        self.target_value = 0.0
-        self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def _run(self):
-        """Background loop to crawl the progress bar toward the target milestone."""
-        while not self.stop_event.is_set():
-            if self.current_value < self.target_value:
-                # Deceleration logic: Slow down as we approach the target to avoid "jumping"
-                remaining = self.target_value - self.current_value
-                
-                if remaining > 0.05:
-                    increment = 0.008  # Normal crawl
-                else:
-                    increment = 0.001  # Fine-grained crawl near milestone
-                
-                self.current_value = min(self.current_value + increment, 0.99) # Cap at 99% until stopped
-                self.pb.progress(self.current_value)
-            
-            time.sleep(0.2)
+        self.status = status_obj
+        self.step = 0
+        self.total_steps = 4
 
     def write(self, text):
-        """Update the status text and move the target milestone forward."""
-        self.st_text.info(f"⏳ {text}")
-        # Each step adds 25% to the target milestone (assuming 4 core steps)
-        self.target_value = min(self.target_value + 0.25, 1.0)
-
-    def stop(self, success=True):
-        """Stop the background thread and set the bar to 100% or clear it."""
-        self.stop_event.set()
-        if success:
-            self.pb.progress(1.0)
-        else:
-            self.pb.empty()
-        if self.thread.is_alive():
-            self.thread.join(timeout=1.0)
+        """Log a step and update the progress bar."""
+        self.step += 1
+        progress = min(self.step / self.total_steps, 1.0)
+        self.pb.progress(progress)
+        self.status.write(f"✅ {text}")
+        self.status.update(label=f"Current Task: {text}...")
 
 def main():
     # Page setup
@@ -153,36 +123,34 @@ def main():
 
         service = TranslationService(api_key=api_key)
 
-        st.markdown("### Processing...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        tracker = ProgressTracker(progress_bar, status_text)
+        with st.status("Initializing Localization Pipeline...", expanded=True) as status:
+            progress_bar = st.progress(0)
+            tracker = SimpleTracker(progress_bar, status)
 
-        try:
-            final_svg_path = service.process_file(
-                input_path=input_path,
-                target_language=target_lang,
-                status_container=tracker
-            )
+            try:
+                final_svg_path = service.process_file(
+                    input_path=input_path,
+                    target_language=target_lang,
+                    status_container=tracker
+                )
+                
+                # Update status to success
+                status.update(label="✨ Translation pipeline complete!", state="complete", expanded=False)
+
+                # Store results in session state for persistence
+                with open(final_svg_path, "rb") as f:
+                    content = f.read()
+                    st.session_state.download_bytes = content
+                    st.session_state.result_svg = base64.b64encode(content).decode('utf-8')
+
+            except Exception as e:
+                status.update(label=f"❌ Pipeline Failure: {str(e)}", state="error", expanded=True)
+                logging.exception("Pipeline failed")
             
-            tracker.stop(success=True)
-            status_text.success("✨ Translation pipeline complete!")
-
-            # Store results in session state for persistence
-            with open(final_svg_path, "rb") as f:
-                content = f.read()
-                st.session_state.download_bytes = content
-                st.session_state.result_svg = base64.b64encode(content).decode('utf-8')
-
-        except Exception as e:
-            if 'tracker' in locals():
-                tracker.stop(success=False)
-            status_text.error(f"Pipeline Failure: {str(e)}")
-            progress_bar.empty()
-        
-        finally:
-            st.session_state.processing = False
-            st.rerun()
+            finally:
+                st.session_state.processing = False
+                # We don't call st.rerun here so the status container remains visible for a moment
+                # Streamlit will naturally re-render once the interaction loop finishes.
 
     # --- Persistent Result Display ---
     if st.session_state.result_svg:
