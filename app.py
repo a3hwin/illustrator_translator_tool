@@ -6,6 +6,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from src.core import TranslationService
 import logging
+import threading
+import time
 
 
 # --- Restore Terminal Debug Logs ---
@@ -32,20 +34,48 @@ def clear_temp():
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 class ProgressTracker:
-    """A clever wrapper to convert text updates from core.py into a filling progress bar."""
+    """A background-threaded tracker that provides smooth, continuous progress bar updates."""
     def __init__(self, progress_bar, status_text):
         self.pb = progress_bar
         self.st_text = status_text
-        self.step = 0
-        self.total_steps = 4 # Total number of steps in TranslationService
+        self.current_value = 0.0
+        self.target_value = 0.0
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        """Background loop to crawl the progress bar toward the target milestone."""
+        while not self.stop_event.is_set():
+            if self.current_value < self.target_value:
+                # Deceleration logic: Slow down as we approach the target to avoid "jumping"
+                remaining = self.target_value - self.current_value
+                
+                if remaining > 0.05:
+                    increment = 0.008  # Normal crawl
+                else:
+                    increment = 0.001  # Fine-grained crawl near milestone
+                
+                self.current_value = min(self.current_value + increment, 0.99) # Cap at 99% until stopped
+                self.pb.progress(self.current_value)
+            
+            time.sleep(0.2)
 
     def write(self, text):
-        # Display the text cleanly
+        """Update the status text and move the target milestone forward."""
         self.st_text.info(f"⏳ {text}")
-        self.step += 1
-        # Fill the bar proportionally, capped at 100%
-        progress = min(self.step / self.total_steps, 1.0)
-        self.pb.progress(progress)
+        # Each step adds 25% to the target milestone (assuming 4 core steps)
+        self.target_value = min(self.target_value + 0.25, 1.0)
+
+    def stop(self, success=True):
+        """Stop the background thread and set the bar to 100% or clear it."""
+        self.stop_event.set()
+        if success:
+            self.pb.progress(1.0)
+        else:
+            self.pb.empty()
+        if self.thread.is_alive():
+            self.thread.join(timeout=1.0)
 
 def main():
     # Page setup
@@ -61,7 +91,8 @@ def main():
             "**Make sure your `.env` file contains the following:**\n\n"
             "1. `GEMINI_API_KEY`: Your active Google Gemini API key.\n"
             "2. `ILLUSTRATOR_PATH`: The absolute path to the Illustrator executable on this machine.\n"
-            "   *(Example: `C:\\Program Files\\Adobe\\Adobe Illustrator 2026\\Support Files\\Contents\\Windows\\Illustrator.exe`)*"
+            "   - **Windows:** `C:\\Program Files\\Adobe\\Adobe Illustrator 2026\\Support Files\\Contents\\Windows\\Illustrator.exe`\n"
+            "   - **macOS:** `/Applications/Adobe Illustrator 2026/Adobe Illustrator.app/Contents/MacOS/Adobe Illustrator`"
         )
 
     # Silent background cleanup
@@ -111,8 +142,8 @@ def main():
                 status_container=tracker
             )
             
-            # Force 100% and success state
-            progress_bar.progress(1.0)
+            # Stop the tracker and show success
+            tracker.stop(success=True)
             status_text.success("✨ Translation pipeline complete!")
 
             # --- Base64 SVG Preview ---
@@ -140,6 +171,8 @@ def main():
                 )
 
         except Exception as e:
+            if 'tracker' in locals():
+                tracker.stop(success=False)
             status_text.error(f"Pipeline Failure: {str(e)}")
             progress_bar.empty() # Hide the broken progress bar
 
