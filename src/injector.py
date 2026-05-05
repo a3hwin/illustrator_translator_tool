@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import arabic_reshaper
+import textwrap
 from bidi.algorithm import get_display
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -76,31 +77,14 @@ class SVGSpatialInjector:
                 missed_nodes += 1
                 continue
 
-            final_text = self._shape_text_if_needed(translated_text, target_language)
-            self._replace_direct_text(target_tag, final_text)
-
-            # --- RTL Attribute & Layout Injection ---
-            is_rtl = target_language.lower().strip() in ['arabic', 'ar', 'hebrew', 'he', 'urdu', 'ur', 'farsi', 'fa']
-            if is_rtl:
-                target_tag["xml:lang"] = "ar" if target_language.lower().strip() in ['arabic', 'ar'] else ""
-                target_tag["direction"] = "rtl"
-                target_tag["unicode-bidi"] = "embed"
-
-                # Anchor Swap to prevent visual drift
-                current_anchor = target_tag.get("text-anchor", "start").lower()
-                new_anchor = current_anchor
-                if current_anchor == "start":
-                    new_anchor = "end"
-                elif current_anchor == "end":
-                    new_anchor = "start"
-                
-                if new_anchor != current_anchor:
-                    target_tag["text-anchor"] = new_anchor
-                    # Also scrub from style attribute to avoid CSS overrides
-                    if target_tag.has_attr("style"):
-                        styles = target_tag["style"].split(";")
-                        new_styles = [s for s in styles if "text-anchor" not in s.lower()]
-                        target_tag["style"] = ";".join(new_styles)
+            final_text = translated_text
+            
+            if target_language.lower().strip() in {"arabic", "ar"}:
+                # Use multiline wrapping for Arabic to prevent infinite "Point Text"
+                self._inject_multiline_arabic(target_tag, translated_text, soup)
+            else:
+                final_text = self._shape_text_if_needed(translated_text, target_language)
+                self._replace_direct_text(target_tag, final_text)
 
             self._apply_textlength_clamping(target_tag)
             self._apply_font_fallback(target_tag, target_language)
@@ -161,10 +145,53 @@ class SVGSpatialInjector:
             The original or script-shaped text, depending on the language.
         """
         normalized_language = target_language.strip().lower()
-        if normalized_language in {"arabic", "ar"}:
-            reshaped_text = arabic_reshaper.reshape(text)
-            return get_display(reshaped_text)
+        
+        # Languages using Arabic script that require reshaping
+        arabic_script_langs = {"arabic", "ar", "urdu", "ur", "farsi", "fa", "persian"}
+        # All RTL languages that require BiDi reordering
+        rtl_langs = arabic_script_langs | {"hebrew", "he"}
+
+        if normalized_language in arabic_script_langs:
+            # Reshape Arabic characters to their contextual forms (initial, medial, final, isolated)
+            text = arabic_reshaper.reshape(text)
+        
+        if normalized_language in rtl_langs:
+            # Apply BiDi algorithm to handle right-to-left visual ordering
+            return get_display(text)
+            
         return text
+
+    def _inject_multiline_arabic(self, parent_tag: Tag, text: str, soup: BeautifulSoup) -> None:
+        """Break Arabic text into lines and inject as multiple <tspan> nodes to preserve layout."""
+        # 1. Dynamic Wrap Width Calculation
+        node_original_text = parent_tag.get_text() or ""
+        orig_len = len(node_original_text)
+        tspan_count = max(1, len(parent_tag.find_all(["tspan", "svg:tspan"])))
+        dynamic_width = max(20, orig_len // tspan_count)
+        
+        # 2. Isolate Node Wiping (Arabic Only)
+        parent_tag.clear()
+        parent_tag.string = ""
+        
+        # Get parent x coordinate to keep alignment consistent
+        parent_x = parent_tag.get("x", "0")
+        
+        # Split into logical lines (Illustrator doesn't auto-wrap SVG text)
+        lines = textwrap.wrap(text, width=dynamic_width)
+        for i, line in enumerate(lines):
+            # Shape and BiDi each line individually for correct connectivity
+            reshaped = arabic_reshaper.reshape(line)
+            final_line = get_display(reshaped)
+            
+            tspan = soup.new_tag("tspan")
+            tspan.string = final_line
+            tspan["x"] = parent_x
+            
+            # Use dy (delta y) to stack lines vertically. Arabic Line Height: 1.6em
+            if i > 0:
+                tspan["dy"] = "1.6em"
+            
+            parent_tag.append(tspan)
 
     def _replace_direct_text(self, tag: Tag, new_text: str) -> None:
         """Replace only immediate NavigableString children of a tag.

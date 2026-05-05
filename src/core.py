@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from src.cli_bridge import VectorBridge
@@ -58,8 +59,9 @@ class TranslationService:
             import shutil
             shutil.copy(input_path, temp_svg)
         else:
-            if not self.bridge.convert_ai_to_svg(str(input_path), str(temp_svg)):
-                raise RuntimeError("Adobe Illustrator failed to export native SVG.")
+            process = self.bridge.convert_ai_to_svg(str(input_path), str(temp_svg))
+            if not self._poll_bridge(process, status_container):
+                raise RuntimeError("Failed to bridge Illustrator file to SVG.")
 
         # Stage 2: Extraction
         if status_container:
@@ -94,6 +96,34 @@ class TranslationService:
         if status_container:
             status_container.write("Step 5: Exporting Final Native .ai Asset...")
             
-        self.bridge.convert_svg_to_ai(str(translated_svg), str(final_ai), target_language)
+        process = self.bridge.convert_svg_to_ai(str(translated_svg), str(final_ai), target_language)
+        if not self._poll_bridge(process, status_container):
+            raise RuntimeError("Failed to export final .ai asset via Illustrator bridge.")
 
         return translated_svg, final_ai
+
+    def _poll_bridge(self, process, status_container) -> bool:
+        """Poll a non-blocking bridge process and update the UI via heartbeats."""
+        if not process:
+            return False
+            
+        base_dir = Path(__file__).resolve().parent.parent
+        heartbeat_file = base_dir / "data" / "temp" / "heartbeat.txt"
+        
+        # Clean previous heartbeats
+        if heartbeat_file.exists():
+            heartbeat_file.unlink()
+            
+        while process.poll() is None:
+            if heartbeat_file.exists():
+                try:
+                    with open(heartbeat_file, "r") as f:
+                        msg = f.read().strip()
+                        if msg and status_container:
+                            # Update the label of the st.status container directly
+                            status_container.status.update(label=f"Illustrator: {msg}")
+                except Exception:
+                    pass
+            time.sleep(0.5)
+            
+        return process.returncode == 0

@@ -22,12 +22,20 @@ function convertToSVG() {
     var sourceFile = new File(sourcePath);
     if (!sourceFile.exists) return;
     var doc = app.open(sourceFile);
+    app.redraw = false;
+
+    var hb = new File("PYTHON_INJECT_HEARTBEAT");
+    hb.open("w");
+    hb.write("Bridging: Initializing native export...");
+    hb.close();
+
     var destFile = new File(destPath);
     var options = new ExportOptionsSVG();
     options.fontType = SVGFontType.SVGFONT; 
     options.embedRasterImages = true; 
     options.cssProperties = SVGCSSPropertyLocation.STYLEATTRIBUTES;
     options.documentEncoding = SVGDocumentEncoding.UTF8;
+    app.redraw = true;
     doc.exportFile(destFile, ExportType.SVG, options);
     doc.close(SaveOptions.DONOTSAVECHANGES);
 }
@@ -44,9 +52,11 @@ function saveAsPDF() {
     var sourceFile = new File(sourcePath);
     if (!sourceFile.exists) return;
     var doc = app.open(sourceFile);
+    app.redraw = false;
     var destFile = new File(destPath);
     var options = new PDFSaveOptions();
     options.preserveEditability = true;
+    app.redraw = true;
     doc.saveAs(destFile, options);
     doc.close(SaveOptions.DONOTSAVECHANGES);
 }
@@ -62,13 +72,21 @@ function saveAsAI() {
     var sourceFile = new File(sourcePath);
     if (!sourceFile.exists) return;
     var doc = app.open(sourceFile);
+    app.redraw = false;
+
+    var hb = new File("PYTHON_INJECT_HEARTBEAT");
+    function pulse(msg) { hb.open("w"); hb.write(msg); hb.close(); }
+    pulse("Round-Trip: Re-importing translated vectors...");
 
     // PYTHON_INJECT_RTL_FIX
+    
+    pulse("Round-Trip: Finalizing Adobe Illustrator asset...");
 
     var destFile = new File(destPath);
     var options = new IllustratorSaveOptions();
     options.compatibility = Compatibility.ILLUSTRATOR24;
     options.flattenOutput = OutputFlattening.PRESERVEAPPEARANCE;
+    app.redraw = true;
     doc.saveAs(destFile, options);
     doc.close(SaveOptions.DONOTSAVECHANGES);
 }
@@ -99,37 +117,19 @@ class VectorBridge:
             self.DEFAULT_ILLUSTRATOR_PATH
         )
 
-    def convert_ai_to_svg(self, input_path: str, output_path: str) -> bool:
-        """Convert an Illustrator (.ai) or .eps file to SVG using native JSX.
-
-        Args:
-            input_path: Path to the source vector file.
-            output_path: Destination path for the exported SVG.
-
-        Returns:
-            True if the SVG exists and is non-empty, False otherwise.
-        """
+    def convert_ai_to_svg(self, input_path: str, output_path: str) -> subprocess.Popen:
+        """Convert an Illustrator (.ai) or .eps file to SVG using native JSX."""
         return self._run_jsx_bridge(input_path, output_path, JSX_CONVERT_TO_SVG)
 
-    def convert_svg_to_pdf(self, input_path: str, output_path: str) -> bool:
+    def convert_svg_to_pdf(self, input_path: str, output_path: str) -> subprocess.Popen:
         """Convert a localized SVG back to a PDF file using native JSX."""
         return self._run_jsx_bridge(input_path, output_path, JSX_SAVE_AS_PDF)
 
-    def convert_svg_to_ai(self, input_path: str, output_path: str, target_language: str) -> bool:
+    def convert_svg_to_ai(self, input_path: str, output_path: str, target_language: str) -> subprocess.Popen:
         """Convert a localized SVG back to a native .ai file using native JSX."""
         rtl_fix = ""
         if target_language.lower().strip() == "arabic":
-            rtl_fix = """
-            if (app.documents.length > 0) {
-                var doc = app.activeDocument;
-                for (var i = 0; i < doc.textFrames.length; i++) {
-                    var tf = doc.textFrames[i];
-                    for (var j = 0; j < tf.paragraphs.length; j++) {
-                        tf.paragraphs[j].paragraphAttributes.justification = Justification.RIGHT;
-                    }
-                }
-            }
-            """
+            rtl_fix = 'pulse("Arabic detected: Using Python-side reshaped vectors...");'
         
         template = JSX_SAVE_AS_AI.replace("// PYTHON_INJECT_RTL_FIX", rtl_fix)
         return self._run_jsx_bridge(input_path, output_path, template)
@@ -157,9 +157,14 @@ class VectorBridge:
         safe_input = str(input_file).replace("\\", "/")
         safe_output = str(output_file).replace("\\", "/")
 
+        # Define heartbeat path
+        heartbeat_file = output_file.parent / "heartbeat.txt"
+        safe_hb = str(heartbeat_file).replace("\\", "/")
+
         # Inject paths into the JSX template
         jsx_content = template.replace("PYTHON_INJECT_SOURCE", safe_input)
         jsx_content = jsx_content.replace("PYTHON_INJECT_DEST", safe_output)
+        jsx_content = jsx_content.replace("PYTHON_INJECT_HEARTBEAT", safe_hb)
 
         # Create temporary JSX script in the output directory
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -170,22 +175,18 @@ class VectorBridge:
                 f.write(jsx_content)
 
             LOGGER.info("DEBUG: Using Illustrator Path -> %s", self.illustrator_path)
-            LOGGER.info("DEBUG: Sanitized Source Path (JSX) -> %s", safe_input)
+            LOGGER.info("DEBUG: Heartbeat Monitor -> %s", heartbeat_file)
             
-            # Subprocess execution: [path, "-run", jsx_file]
+            # Non-blocking Subprocess execution: [path, "-run", jsx_file]
             command = [self.illustrator_path, "-run", str(jsx_script_path)]
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        except (OSError, subprocess.CalledProcessError) as exc:
-            LOGGER.error("Illustrator JSX execution failed: %s", exc)
-            return False
-        finally:
-            # Cleanup temporary JSX script
-            if jsx_script_path.exists():
-                try:
-                    os.remove(jsx_script_path)
-                except OSError:
-                    LOGGER.warning("Failed to delete temporary JSX script: %s", jsx_script_path)
+        except OSError as exc:
+            LOGGER.error("Failed to start Illustrator subprocess: %s", exc)
+            return None
+
+        # Note: We do NOT cleanup the JSX script here because Popen is non-blocking.
+        # The script is overwritten on every call.
 
         # Final Validation
         if output_file.exists() and output_file.stat().st_size > 0:
