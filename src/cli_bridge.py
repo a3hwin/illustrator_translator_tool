@@ -53,6 +53,29 @@ function saveAsPDF() {
 saveAsPDF();
 """
 
+JSX_SAVE_AS_AI = """
+#target illustrator
+app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+function saveAsAI() {
+    var sourcePath = "PYTHON_INJECT_SOURCE";
+    var destPath = "PYTHON_INJECT_DEST";
+    var sourceFile = new File(sourcePath);
+    if (!sourceFile.exists) return;
+    var doc = app.open(sourceFile);
+
+    // PYTHON_INJECT_RTL_FIX
+
+    var destFile = new File(destPath);
+    var options = new IllustratorSaveOptions();
+    options.compatibility = Compatibility.ILLUSTRATOR24;
+    options.flattenOutput = OutputFlattening.PRESERVEAPPEARANCE;
+    doc.saveAs(destFile, options);
+    doc.close(SaveOptions.DONOTSAVECHANGES);
+}
+saveAsAI();
+"""
+
+
 class VectorBridge:
     """Bridge Illustrator assets using native Adobe ExtendScript execution.
     
@@ -89,16 +112,27 @@ class VectorBridge:
         return self._run_jsx_bridge(input_path, output_path, JSX_CONVERT_TO_SVG)
 
     def convert_svg_to_pdf(self, input_path: str, output_path: str) -> bool:
-        """Convert a localized SVG back to a PDF/AI file using native JSX.
-
-        Args:
-            input_path: Path to the translated SVG file.
-            output_path: Destination path for the final PDF/AI file.
-
-        Returns:
-            True if the output file exists and is non-empty, False otherwise.
-        """
+        """Convert a localized SVG back to a PDF file using native JSX."""
         return self._run_jsx_bridge(input_path, output_path, JSX_SAVE_AS_PDF)
+
+    def convert_svg_to_ai(self, input_path: str, output_path: str, target_language: str) -> bool:
+        """Convert a localized SVG back to a native .ai file using native JSX."""
+        rtl_fix = ""
+        if target_language.lower().strip() == "arabic":
+            rtl_fix = """
+            if (app.documents.length > 0) {
+                var doc = app.activeDocument;
+                for (var i = 0; i < doc.textFrames.length; i++) {
+                    var tf = doc.textFrames[i];
+                    for (var j = 0; j < tf.paragraphs.length; j++) {
+                        tf.paragraphs[j].paragraphAttributes.justification = Justification.RIGHT;
+                    }
+                }
+            }
+            """
+        
+        template = JSX_SAVE_AS_AI.replace("// PYTHON_INJECT_RTL_FIX", rtl_fix)
+        return self._run_jsx_bridge(input_path, output_path, template)
 
     def _run_jsx_bridge(self, input_path: str, output_path: str, template: str) -> bool:
         """Execute a dynamic JSX script within Adobe Illustrator.

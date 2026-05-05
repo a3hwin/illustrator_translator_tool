@@ -33,19 +33,14 @@ class TranslationService:
 
     def process_file(
         self, 
-        input_path: str | Path, 
+        input_path: Path, 
         target_language: str,
         status_container: Any = None
-    ) -> Path:
-        """Run the end-to-end localization pipeline.
+    ) -> tuple[Path, Path]:
+        """Execute the full 5-stage localization pipeline.
         
-        Args:
-            input_path: Path to the source .ai or .svg file.
-            target_language: Target language (e.g., 'Hindi', 'Arabic').
-            status_container: Optional Streamlit status object for progress updates.
-            
         Returns:
-            Path to the final translated SVG.
+            A tuple of (translated_svg_path, translated_ai_path).
         """
         base_dir = Path(__file__).resolve().parent.parent
         temp_dir = base_dir / "data" / "temp"
@@ -94,4 +89,11 @@ class TranslationService:
         if not success:
             raise RuntimeError("Failed to inject translated vectors into SVG DOM.")
 
-        return translated_svg
+        # Stage 5: Round-Trip (SVG -> AI)
+        final_ai = translated_svg.with_suffix(".ai")
+        if status_container:
+            status_container.write("Step 5: Exporting Final Native .ai Asset...")
+            
+        self.bridge.convert_svg_to_ai(str(translated_svg), str(final_ai), target_language)
+
+        return translated_svg, final_ai

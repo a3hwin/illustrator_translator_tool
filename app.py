@@ -37,7 +37,7 @@ class SimpleTracker:
         self.pb = progress_bar
         self.status = status_obj
         self.step = 0
-        self.total_steps = 4
+        self.total_steps = 5
 
     def write(self, text):
         """Log a step and update the progress bar."""
@@ -94,6 +94,8 @@ def main():
         st.session_state.result_svg = None
     if "download_bytes" not in st.session_state:
         st.session_state.download_bytes = None
+    if "download_ai_bytes" not in st.session_state:
+        st.session_state.download_ai_bytes = None
     if "processing" not in st.session_state:
         st.session_state.processing = False
 
@@ -128,7 +130,7 @@ def main():
             tracker = SimpleTracker(progress_bar, status)
 
             try:
-                final_svg_path = service.process_file(
+                final_svg_path, final_ai_path = service.process_file(
                     input_path=input_path,
                     target_language=target_lang,
                     status_container=tracker
@@ -137,11 +139,15 @@ def main():
                 # Update status to success
                 status.update(label="✨ Translation pipeline complete!", state="complete", expanded=False)
 
-                # Store results in session state for persistence
+                # Store SVG results
                 with open(final_svg_path, "rb") as f:
-                    content = f.read()
-                    st.session_state.download_bytes = content
-                    st.session_state.result_svg = base64.b64encode(content).decode('utf-8')
+                    svg_content = f.read()
+                    st.session_state.download_bytes = svg_content
+                    st.session_state.result_svg = base64.b64encode(svg_content).decode('utf-8')
+                
+                # Store AI results
+                with open(final_ai_path, "rb") as f:
+                    st.session_state.download_ai_bytes = f.read()
 
             except Exception as e:
                 status.update(label=f"❌ Pipeline Failure: {str(e)}", state="error", expanded=True)
@@ -165,14 +171,27 @@ def main():
         '''
         st.markdown(svg_html, unsafe_allow_html=True)
 
-        st.download_button(
-            label="⬇️ Download Translated SVG",
-            data=st.session_state.download_bytes,
-            file_name=f"localized_{target_lang}_{uploaded_file.name}.svg" if uploaded_file else "translated.svg",
-            mime="image/svg+xml",
-            type="primary",
-            use_container_width=True
-        )
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.download_button(
+                label="⬇️ Download .AI Asset",
+                data=st.session_state.download_ai_bytes,
+                file_name=f"localized_{target_lang}_{uploaded_file.name}.ai" if uploaded_file else "translated.ai",
+                mime="application/postscript",
+                type="primary",
+                use_container_width=True
+            )
+
+        with col2:
+            st.download_button(
+                label="⬇️ Download .SVG Asset",
+                data=st.session_state.download_bytes,
+                file_name=f"localized_{target_lang}_{uploaded_file.name}.svg" if uploaded_file else "translated.svg",
+                mime="image/svg+xml",
+                type="secondary",
+                use_container_width=True
+            )
 
 if __name__ == "__main__":
     main()
